@@ -1,15 +1,21 @@
-# Set the cloud provider and the region
+/*
+* Author: Nuri Dagasan
+* Date: 19/09/2022 17:13
+* Note: Create EC2 instance with ASG
+*/
+
+# Set the cloud provider and the region.
 provider "aws" {
   region = "us-east-2"
 }
 
-# Create a EC2 instance
-resource "aws_instance" "web_server" {
-  ami           = "ami-0fb653ca2d3203ac1"
-  instance_type = "t2.micro"
+# Create an ASG launch configuration
+resource "aws_launch_configuration" "web_server" {
+  image_id        = "ami-0fb653ca2d3203ac1"
+  instance_type   = "t2.micro"
 
-  # Give a reference to security group
-  vpc_security_group_ids = [aws_security_group.web_server.id]
+  # Give a reference to security group.
+  security_groups = [aws_security_group.web_server.id]
 
   # Exucute shell script for first boot
   # EOF, hdc syntax, allows to create multiline strings
@@ -19,19 +25,28 @@ resource "aws_instance" "web_server" {
               nohup busybox httpd -f -p ${var.server_port} &
               EOF
 
-  # If the user_data parameter changes, terraform terminates the
-  # original instance and create a new one. Since user_data is only 
-  # executed during boot process, a new instance is required
-  user_data_replace_on_change = true
-
-  tags = {
-    Name = "ubuntu-web-server"
+  # Required when using a launch configuration with an ASG.
+  lifecycle {
+    create_before_destroy = true
   }
+}
 
+# Create an ASG.
+resource "aws_autoscaling_group" "web_server_asg" {
+  launch_configuration = aws_launch_configuration.web_server.name
+  vpc_zone_identifier = data.aws_subnets.default.ids
+  min_size = 2
+  max_size = 5
+
+  tag {
+    key                 = "Name"
+    value               = "web-server-asg"
+    propagate_at_launch = true
+  }
 }
 
 # Create a security group to allow inbound TCP traffic on port 8080
-# outbound any IP
+# outbound any IP.
 resource "aws_security_group" "web_server" {
   name = "web-server-sg"
 
@@ -51,8 +66,15 @@ variable "server_port" {
   default = 8080
 }
 
-# Get public IP of web server instance
-output "public_ip" {
-  value = aws_instance.web_server.public_ip
-  description = "The public IP address of the web server"
+# Read information about the default VPC from AWS
+data "aws_vpc" "default" {
+  default = true
+}
+
+# Look up the subnets within that VPC
+data "aws_subnets" "default" {
+  filter {
+    name   = "vpc-id"
+    values = [data.aws_vpc.default.id]
+  }
 }
